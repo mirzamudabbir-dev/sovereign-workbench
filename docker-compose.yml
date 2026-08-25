@@ -1,0 +1,19 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.0
+    ports: ["127.0.0.1:6333:6333"]
+    volumes: ["./data/qdrant:/qdrant/storage"]
+    restart: unless-stopped
+
+  tetragon:
+    image: quay.io/cilium/tetragon:v1.1.2
+    pid: host
+    cgroup: host
+    privileged: true
+    volumes:
+      - /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf:ro
+      - /proc:/procRoot:ro
+      - ./policies:/etc/tetragon/tetragon.tp.d:ro
+      - ./data/tetragon:/var/log/tetragon
+    command: ["--export-filename", "/var/log/tetragon/events.json"]
+    restart: unless-stopped

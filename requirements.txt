@@ -1,0 +1,23 @@
+# requirements.txt — pinned, no extras
+vllm==0.6.6
+langgraph==0.2.60
+langgraph-checkpoint-sqlite==2.0.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+streamlit==1.41.1
+docling==2.15.0
+qdrant-client==1.12.1
+sentence-transformers==3.3.1
+docxtpl==0.19.0
+python-docx==1.1.2
+python-pptx==1.0.2
+openpyxl==3.1.5
+docker==7.1.0
+pydantic==2.10.4
+pyyaml==6.0.2
+cryptography==44.0.0
+pillow==11.0.0
+pymupdf==1.25.1
+openai==1.59.6
+pytest==8.3.4
+httpx==0.28.1

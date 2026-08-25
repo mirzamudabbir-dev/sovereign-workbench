@@ -1,0 +1,31 @@
+# Single source of runtime configuration.
+# Must match the `Settings` model in docs/01_CONTRACTS.md field-for-field.
+# All paths are resolved to absolute at load time by core/config.py.
+
+paths:
+  data:        ./data
+  uploads:     ./data/uploads
+  page_images: ./data/page_images
+  workspaces:  ./data/workspaces
+  outputs:     ./data/outputs
+  receipts:    ./data/receipts
+  manifests:   ./manifests
+  templates:   ./templates
+
+sandbox:
+  image:       sovereign-sandbox:latest
+  runtime:     runsc          # gVisor. Change to "runc" ONLY if runsc is unavailable,
+                              # and record the reason in PROGRESS.md.
+  timeout_s:   60
+  mem_limit:   2g
+  pids_limit:  64
+
+agent:
+  max_iterations:        3     # hard cap on the verify -> re-plan loop
+  ocr_review_threshold:  0.75  # below this, EvidenceSpan.needs_review = True
+
+qdrant_url:           http://127.0.0.1:6333
+embedding_model_path: ./models/bge-m3        # LOCAL PATH ONLY. Never a HuggingFace id
+                                             # at runtime — that is a network call (breaks R1).
+router_model_id:      arch-router-1.5b
+ocr_model_id:         paddleocr-vl

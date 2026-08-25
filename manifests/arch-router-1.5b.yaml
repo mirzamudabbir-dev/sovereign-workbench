@@ -1,0 +1,15 @@
+id: arch-router-1.5b
+served_model_name: katanemo/Arch-Router-1.5B
+base_url: http://127.0.0.1:8003/v1
+licence_class: permissive
+modalities: [text]
+max_context: 8192
+vram_gb: 3.1
+quantization: none
+supports_grammar: true
+task_affinities: [routing]
+description: >
+  Tiny routing-only model. Not a candidate for any user-facing task — used exclusively by L2
+  to pick which other model should handle a given step, based on the other manifests'
+  description fields.
+enabled: true
