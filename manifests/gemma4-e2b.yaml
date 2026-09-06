@@ -1,0 +1,15 @@
+id: gemma4-e2b
+served_model_name: gemma4:e2b
+base_url: http://127.0.0.1:11434/v1
+licence_class: permissive          # Apache-2.0
+modalities: [text, image]
+max_context: 32768
+vram_gb: 1.5                       # NOTE: reinterpreted as resident RAM on this profile, not VRAM
+quantization: q4_0
+supports_grammar: true
+task_affinities: [drafting, summarisation, general_reasoning, vision_extraction]
+description: >
+  General-purpose reasoning and drafting model that also reads images. Use for writing
+  approval notes, summarising inspection reports, answering questions about documents, and
+  any request that includes a photograph, scan, or engineering drawing.
+enabled: true

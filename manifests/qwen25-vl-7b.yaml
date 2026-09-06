@@ -12,4 +12,4 @@ description: >
   General-purpose reasoning and drafting model that can also read images. Use for writing
   approval notes, summarising reports, answering questions about documents, and any request
   that includes a picture, scan, or engineering drawing.
-enabled: true
+enabled: false

@@ -14,8 +14,14 @@ paths:
 
 sandbox:
   image:       sovereign-sandbox:latest
-  runtime:     runsc          # gVisor. Change to "runc" ONLY if runsc is unavailable,
-                              # and record the reason in PROGRESS.md.
+  runtime:     runc           # Documented fallback (see core/sandbox.py's own comment) — this
+                              # session's colima VM is a fresh instance without gVisor registered
+                              # (Session 6/7 noted the same gap; Session 4's runsc install did not
+                              # persist across colima VM recreations on this dev machine). runc
+                              # still gives network_mode="none" + the other isolation flags; only
+                              # the extra kernel-syscall-interception layer is missing. The venue
+                              # Ubuntu box gets its own real gVisor install via
+                              # scripts/00_install_gvisor.sh — set this back to `runsc` there.
   timeout_s:   60
   mem_limit:   2g
   pids_limit:  64
@@ -25,7 +31,14 @@ agent:
   ocr_review_threshold:  0.75  # below this, EvidenceSpan.needs_review = True
 
 qdrant_url:           http://127.0.0.1:6333
-embedding_model_path: ./models/bge-m3        # LOCAL PATH ONLY. Never a HuggingFace id
+embedding_model_path: ./models/embeddinggemma-300m   # LOCAL PATH ONLY. Never a HuggingFace id
                                              # at runtime — that is a network call (breaks R1).
-router_model_id:      arch-router-1.5b
-ocr_model_id:         paddleocr-vl
+router_model_id:      gemma4-e2b
+ocr_model_id:         gemma4-e2b-ocr
+
+# --- Local dev profile (8 GB M1 MacBook Air, Ollama) — see docs/PATCH_02_LOCAL_MODELS.md ---
+serving_backend:        ollama
+structured_output_mode: response_format  # set from scripts/probe_structured.py — see PROGRESS.md
+
+audit:
+  egress_source: pktap   # macOS dev; "tetragon" on the Linux demo box

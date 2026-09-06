@@ -32,6 +32,16 @@ class EvidenceSpan(BaseModel):
     extractor: str                     # "docling" | "paddleocr-vl" | "native"
     needs_review: bool = False         # True when confidence < threshold (handwriting)
 
+    @field_validator("bbox")
+    @classmethod
+    def _bbox_normalised(cls, v):
+        x0, y0, x1, y1 = v
+        if not all(0.0 <= c <= 1.0 for c in v):
+            raise ValueError(f"bbox must be normalised to [0,1], got {v}")
+        if x0 >= x1 or y0 >= y1:
+            raise ValueError(f"bbox must satisfy x0<x1 and y0<y1, got {v}")
+        return v
+
 
 class DocumentRef(BaseModel):
     doc_id: str
@@ -58,6 +68,8 @@ class TaskAffinity(str, Enum):
     CODING = "coding"
     VISION_EXTRACTION = "vision_extraction"
     ROUTING = "routing"
+    EMBEDDING = "embedding"            # embedding-only models
+    OCR_EXTRACTION = "ocr_extraction"  # dedicated OCR/layout services
 
 
 class ModelManifest(BaseModel):

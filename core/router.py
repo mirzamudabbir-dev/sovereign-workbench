@@ -32,6 +32,15 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_LICENCES = {LicenceClass.PERMISSIVE, LicenceClass.RESTRICTED}
 
+INTERNAL_ONLY_AFFINITIES = {
+    TaskAffinity.ROUTING, TaskAffinity.EMBEDDING, TaskAffinity.OCR_EXTRACTION,
+}
+
+
+def _is_internal_only(m: ModelManifest) -> bool:
+    """True when EVERY affinity is internal. A VLM that also drafts is not internal."""
+    return set(m.task_affinities) <= INTERNAL_ONLY_AFFINITIES
+
 
 class RouteRequest(BaseModel):
     step_id: str
@@ -67,10 +76,8 @@ def _licence_reason(m: ModelManifest, r: RouteRequest) -> str:
 
 
 def _affinity_reason(m: ModelManifest, r: RouteRequest) -> str:
-    return (
-        f"reserved for internal use ({r.excluded_affinity.value.replace('_', ' ')} models "
-        "are excluded from this routing request)"
-    )
+    affinities = ", ".join(a.value.replace("_", " ") for a in m.task_affinities)
+    return f"reserved for internal use ({affinities} only) and not available for general routing"
 
 
 # name, predicate(manifest, request) -> bool (True = passes), reason(manifest, request) -> str
@@ -79,7 +86,7 @@ CAPABILITY_FILTERS = [
     ("context", lambda m, r: m.max_context >= r.estimated_tokens, _context_reason),
     ("grammar", lambda m, r: (not r.needs_structured_output) or m.supports_grammar, _grammar_reason),
     ("licence", lambda m, r: m.licence_class in ALLOWED_LICENCES, _licence_reason),
-    ("affinity", lambda m, r: r.excluded_affinity not in m.task_affinities, _affinity_reason),
+    ("affinity", lambda m, r: not _is_internal_only(m), _affinity_reason),
 ]
 
 
@@ -122,7 +129,11 @@ async def _arch_router_select(req: RouteRequest, candidates: list[ModelManifest]
     )
     messages = [{"role": "user", "content": prompt}]
 
-    choice = await complete_structured(SETTINGS.router_model_id, messages, _ArchChoice)
+    try:
+        choice = await complete_structured(SETTINGS.router_model_id, messages, _ArchChoice)
+    except WorkbenchError as exc:
+        logger.warning("router unavailable (%s); defaulting to first candidate", exc)
+        return candidates[0].id, f"router unavailable ({type(exc).__name__}); defaulted to first candidate"
 
     candidate_ids = {m.id for m in candidates}
     if choice.model_id not in candidate_ids:

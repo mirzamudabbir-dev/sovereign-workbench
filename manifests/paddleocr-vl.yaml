@@ -7,9 +7,9 @@ max_context: 8192
 vram_gb: 2.5
 quantization: none
 supports_grammar: false
-task_affinities: [vision_extraction]
+task_affinities: [ocr_extraction]
 description: >
   OCR and layout extraction model for scanned documents, handwriting, engineering drawings,
   and photos. Use to pull raw text and bounding boxes off a page image before any reasoning
   or drafting step runs on that content. Does not produce structured JSON output.
-enabled: true
+enabled: false

@@ -1,15 +1,15 @@
-id: qwen25-coder-7b
-served_model_name: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-base_url: http://127.0.0.1:8002/v1
+id: qwen25-coder-1.5b
+served_model_name: qwen2.5-coder:1.5b
+base_url: http://127.0.0.1:11434/v1
 licence_class: permissive
 modalities: [text]
 max_context: 16384
-vram_gb: 4.8
-quantization: awq
+vram_gb: 1.0                       # NOTE: reinterpreted as resident RAM on this profile, not VRAM
+quantization: q4_0
 supports_grammar: true
 task_affinities: [coding]
 description: >
   Specialised code model. Use for writing, fixing, refactoring or explaining source code,
   writing scripts, generating engineering calculations as executable Python, and producing
   test cases.
-enabled: false
+enabled: true

@@ -44,18 +44,22 @@ class ModelRegistry:
             paths[manifest.id] = yaml_path
         self._manifests = manifests
         self._paths = paths
+        if not manifests:
+            logger.error("no manifests found in %s — every route will fail", self._manifests_dir)
         logger.info("registry reloaded: %d manifests from %s", len(manifests), self._manifests_dir)
 
     def all(self) -> list[ModelManifest]:
         """Enabled manifests only."""
         return [m for m in self._manifests.values() if m.enabled]
 
-    def get(self, model_id: str) -> ModelManifest:
-        """Raise WorkbenchError if unknown."""
-        try:
-            return self._manifests[model_id]
-        except KeyError:
-            raise WorkbenchError(f"unknown model_id: {model_id!r}") from None
+    def get(self, model_id: str, *, include_disabled: bool = False) -> ModelManifest:
+        """Raise WorkbenchError if unknown, or disabled and include_disabled is False."""
+        m = self._manifests.get(model_id)
+        if m is None:
+            raise WorkbenchError(f"unknown model_id: {model_id!r}")
+        if not m.enabled and not include_disabled:
+            raise WorkbenchError(f"model {model_id!r} is disabled in its manifest")
+        return m
 
     def manifest_hashes(self) -> dict[str, str]:
         """model_id -> sha256 of the manifest file. Consumed by L8 receipts."""
@@ -124,6 +128,22 @@ def _content_to_text(content) -> str:
     return str(content)
 
 
+def _structured_kwargs(schema: dict) -> dict:
+    """Structured-output request shape varies by serving backend. One function, three
+    branches — not an inference-engine abstraction layer. See PATCH_02_LOCAL_MODELS.md."""
+    mode = SETTINGS.structured_output_mode
+    if mode == "guided_json":
+        return {"extra_body": {"guided_json": schema}}
+    if mode == "response_format":
+        return {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "out", "schema": schema, "strict": True},
+            }
+        }
+    return {"extra_body": {"format": schema}}          # ollama_format
+
+
 def estimate_tokens(messages: list[dict], images: list[Path] | None = None) -> int:
     """len(text)//3.5 + 800 per image. Deliberately crude — L2 only needs it to filter
     models by max_context, not to bill anyone."""
@@ -182,7 +202,10 @@ async def complete(
         raise
     latency_ms = (time.monotonic() - start) * 1000
     logger.info("model=%s tokens_est=%d latency_ms=%.1f ok=True", model_id, tokens_est, latency_ms)
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    if content is None:
+        raise WorkbenchError(f"model {model_id!r} returned empty content")
+    return content
 
 
 async def complete_structured(
@@ -219,13 +242,15 @@ async def complete_structured(
             messages=current_messages,
             max_tokens=max_tokens,
             temperature=0.0,
-            extra_body={"guided_json": schema},
+            **_structured_kwargs(schema),
         )
 
     start = time.monotonic()
     try:
         response = await call(msgs)
         raw_text = response.choices[0].message.content
+        if raw_text is None:
+            raise WorkbenchError(f"model {model_id!r} returned empty content")
         try:
             result = schema_model.model_validate_json(raw_text)
         except ValidationError as first_error:
@@ -241,6 +266,8 @@ async def complete_structured(
             ]
             response = await call(retry_messages)
             raw_text = response.choices[0].message.content
+            if raw_text is None:
+                raise WorkbenchError(f"model {model_id!r} returned empty content") from None
             try:
                 result = schema_model.model_validate_json(raw_text)
             except ValidationError as second_error:

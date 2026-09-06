@@ -8,8 +8,13 @@ __pycache__/
 data/
 models/
 run/
-policies/*
-!policies/.gitkeep
+
+# policies/ holds committed Tetragon TracingPolicy source — do NOT ignore it
+
+# Signing keys must never be committed — an accidentally committed signing key
+# invalidates every receipt ever issued (data/ already covers this, but be explicit)
+data/signing_key.pem
+*.pem
 
 # OS
 .DS_Store

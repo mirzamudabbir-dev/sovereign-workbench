@@ -1,0 +1,15 @@
+id: gemma4-e2b-ocr
+served_model_name: gemma4:e2b
+base_url: http://127.0.0.1:11434/v1
+licence_class: permissive
+modalities: [text, image]
+max_context: 32768
+vram_gb: 1.5                       # NOTE: resident RAM; shares weights with gemma4-e2b (same tag)
+quantization: q4_0
+supports_grammar: true
+task_affinities: [ocr_extraction]
+description: >
+  OCR and layout extraction role for scanned documents, handwriting, engineering drawings, and
+  photos. Same weights as gemma4-e2b (general_reasoning), served under a distinct manifest id
+  so it stays excluded from general routing via the ocr_extraction affinity.
+enabled: true

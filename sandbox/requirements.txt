@@ -1,0 +1,6 @@
+pandas==2.2.3
+numpy==2.2.1
+openpyxl==3.1.5
+pint==0.24.4          # unit-aware calculations (R9: "calculations with steps shown")
+sympy==1.13.3         # independent re-derivation for the verify path
+pytest==8.3.4

@@ -1,0 +1,14 @@
+id: embeddinggemma-300m
+served_model_name: embeddinggemma:latest
+base_url: http://127.0.0.1:11434/v1
+licence_class: permissive
+modalities: [text]
+max_context: 2048
+vram_gb: 0.3                       # NOTE: resident RAM, not VRAM
+quantization: q4_0
+supports_grammar: false
+task_affinities: [embedding]
+description: >
+  Text embedding model for L6 retrieval. Not a candidate for any user-facing generation task —
+  never routed for drafting, summarisation, coding, or vision extraction.
+enabled: true
