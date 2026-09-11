@@ -40,6 +40,7 @@ from core.prompts import (
     WRITE_CODE_PROMPT,
     WRITE_TESTS_PROMPT,
 )
+from core.receipt import build_receipt, write_receipt
 from core.render import EvidenceResolutionError, render, validate_plan
 from core.router import RouteRequest, route_and_complete
 from core.sandbox import run_tests, verify_calculation, workspace_for
@@ -481,14 +482,23 @@ async def node_approve(state: WorkbenchState) -> dict:
     """Human gate. LangGraph pauses here via interrupt() until resume_task() provides a
     decision. Reached both on a clean verify pass and on escalation (budget exhausted) —
     either way a human sees the failures (if any) and the needs_review spans before
-    anything is written to disk."""
+    anything is written to disk.
+
+    Every state access below uses .get(), not state[...] — proven necessary, not
+    defensive-for-its-own-sake: LangGraph 0.2.60 drops any WorkbenchState channel that
+    was set only by the initial input and never rewritten by a later node (e.g.
+    render_plan on a CODING/DOC_QA run, or evidence on a run with no RETRIEVE step) from
+    the state dict handed to a node that is REPLAYED after interrupt()/resume — direct
+    bracket access raises KeyError on resume in exactly that case. Confirmed by a
+    minimal reproduction using the real WorkbenchState/PlanStep types before this fix
+    was written; see PROGRESS.md Session 9."""
     decision = interrupt(
         {
-            "task_id": state["task_id"],
-            "render_plan": state["render_plan"],
-            "verify_failures": state["verify_failures"],
-            "evidence_count": len(state["evidence"]),
-            "needs_review_spans": [s.span_id for s in state["evidence"] if s.needs_review],
+            "task_id": state.get("task_id"),
+            "render_plan": state.get("render_plan"),
+            "verify_failures": state.get("verify_failures", []),
+            "evidence_count": len(state.get("evidence", [])),
+            "needs_review_spans": [s.span_id for s in state.get("evidence", []) if s.needs_review],
         }
     )
     approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
@@ -502,20 +512,53 @@ async def node_approve(state: WorkbenchState) -> dict:
 
 
 async def node_emit(state: WorkbenchState) -> dict:
-    """Renders the deliverable (if any) and finalises artifacts. A human already approved
-    with full visibility of needs_review spans in APPROVE's interrupt payload, so
-    allow_review_spans=True here is that approval being honoured, not a bypass."""
-    artifacts = list(state["artifacts"])
+    """Renders the deliverable (if any), finalises artifacts, and closes the L8 receipt.
+    A human already approved with full visibility of needs_review spans in APPROVE's
+    interrupt payload, so allow_review_spans=True here is that approval being honoured,
+    not a bypass.
 
-    if state["status"] == "failed":
+    The receipt call is the ONLY coupling to L8 (core.receipt), per docs/L8_AUDIT.md's
+    own text: "L4's node_emit calls build_receipt() then write_receipt()." L8 observes;
+    it must never block a task — if the egress monitor isn't running (e.g. no Tetragon/
+    pktap capture on this host), build_receipt() raises, and that is logged and
+    swallowed here rather than failing an otherwise-successful, human-approved task.
+
+    Every state access below uses .get() — see node_approve's docstring for why this is
+    a proven necessity, not defensive-for-its-own-sake, on the post-resume path. `artifacts`
+    and `render_plan` are exactly the "written only at init, never again" shape that
+    triggers the bug for any task type that skips RENDER (CODING, DOC_QA); `tool_trace`
+    is equally at risk for any task that never hits EXECUTE_CODE.
+    """
+    task_id = state.get("task_id")
+    task_spec = state.get("task_spec")
+    artifacts = list(state.get("artifacts", []))
+
+    if state.get("status") == "failed":
         return {"artifacts": artifacts}
 
-    if state["render_plan"] is not None:
-        path = render(state["render_plan"], state["task_id"], allow_review_spans=True)
+    render_plan = state.get("render_plan")
+    if render_plan is not None:
+        path = render(render_plan, task_id, allow_review_spans=True)
         artifacts.append(str(path))
     else:
-        ws = workspace_for(state["task_id"])
+        ws = workspace_for(task_id)
         artifacts.extend(sorted(str(p) for p in ws.glob("*") if p.is_file()))
+
+    if task_spec is None:
+        logger.warning("task_spec missing from state for task %s — cannot build L8 receipt", task_id)
+    else:
+        try:
+            receipt = build_receipt(
+                task_id,
+                task_spec.created_at,
+                datetime.now(timezone.utc),
+                state.get("route_decisions", []),
+                state.get("tool_trace", []),
+                [Path(a) for a in artifacts],
+            )
+            write_receipt(receipt)
+        except WorkbenchError as exc:
+            logger.warning("could not build/write L8 receipt for task %s: %s", task_id, exc)
 
     return {"artifacts": artifacts, "status": "done"}
 
@@ -717,15 +760,40 @@ async def _demo_approval() -> None:
     print(f"=== total wall-clock: {time.monotonic() - t0:.1f}s ===")
 
 
+async def _demo_doc_qa() -> None:
+    """R15's flagship: a plain question answered from the KB, every fact cited by span
+    id, verified mechanically (core.graph._verify_doc_qa) rather than "does this look
+    right". Relies on the KB already holding indexed spans — see
+    scripts/index_corpus.py; earlier sessions' fixture ingests already populated the
+    live Qdrant collection with V-101 shell-thickness content, which is what this asks
+    about. Doubles as the "normal task keeps working" step in
+    scripts/negative_control.sh."""
+    spec = TaskSpec(
+        task_id=_new_task_id(),
+        task_type=TaskType.DOC_QA,
+        instruction="What does the inspection report say about vessel V-101's shell thickness?",
+        doc_ids=[],
+        created_at=datetime.now(timezone.utc),
+    )
+    t0 = time.monotonic()
+    state = await run_task(spec)
+    print(f"=== DOC_QA DEMO ({time.monotonic() - t0:.1f}s) ===")
+    _print_result(state)
+    if state.get("__interrupt__"):
+        state = await resume_task(spec.task_id, approval=True, note="demo auto-approve")
+        _print_result(state)
+    print(f"=== total wall-clock: {time.monotonic() - t0:.1f}s ===")
+
+
+_DEMOS = {"coding": _demo_coding, "approval": _demo_approval, "doc_qa": _demo_doc_qa}
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--demo", choices=["coding", "approval"], required=True)
+    parser.add_argument("--demo", choices=sorted(_DEMOS), required=True)
     args = parser.parse_args()
-    if args.demo == "coding":
-        asyncio.run(_demo_coding())
-    else:
-        asyncio.run(_demo_approval())
+    asyncio.run(_DEMOS[args.demo]())
 
 
 if __name__ == "__main__":

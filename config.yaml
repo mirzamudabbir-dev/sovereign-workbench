@@ -41,4 +41,15 @@ serving_backend:        ollama
 structured_output_mode: response_format  # set from scripts/probe_structured.py — see PROGRESS.md
 
 audit:
-  egress_source: pktap   # macOS dev; "tetragon" on the Linux demo box
+  egress_source: pktap   # macOS dev; "tetragon" on the Linux demo box. Reverted after
+                          # Session 9's live verification (colima + a real Tetragon
+                          # container, genuinely observed AND enforced for real — see
+                          # PROGRESS.md). Left as "tetragon" only long enough to prove
+                          # the whole receipt pipeline end to end; back to "pktap" as
+                          # the honest default, since this Tetragon instance can only
+                          # see traffic that originates INSIDE colima's own Docker
+                          # (confirmed empirically: a native macOS curl produces zero
+                          # events, a container curl does) — every real task's LLM/KB
+                          # traffic runs natively on macOS on this dev machine, so
+                          # leaving "tetragon" as the default would make every future
+                          # receipt look emptier than reality, not more correct.
