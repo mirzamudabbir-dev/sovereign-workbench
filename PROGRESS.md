@@ -20,7 +20,7 @@ A session that ends without an entry here has failed, regardless of how much cod
 | L6 KB | `docs/L6_KB.md` | | 🟢 complete — real Qdrant (Docker/colima), real embedding calls, all live on this machine (see Session 6) | `pytest tests/test_kb.py -v -m integration` → 10/10 pass, real services, no mocks |
 | L7b Renderer | `docs/L7B_RENDERER.md` | | 🟢 complete — all 14 tests real, no live services needed (see Session 7) | `pytest tests/test_render.py -v` → 14/14 pass |
 | L4 Orchestrator | `docs/L4_ORCHESTRATOR.md` | | 🟡 partial — code complete, 7/7 non-integration tests pass for real; live end-to-end demos NOT completed this session (thermal/time constraints on this dev machine, see Session 8) | `pytest tests/test_graph.py -v -m "not integration"` → 7/7 pass. `--demo coding`/`--demo approval` not yet run to completion. |
-| L8 Audit | `docs/L8_AUDIT.md` | | ⬜ not started | — |
+| L8 Audit | `docs/L8_AUDIT.md` | | 🟡 partial — core/receipt.py + policies/ + scripts complete, 32/32 non-integration tests pass for real (see Session 9); the two CLI-level DoD commands are blocked by gaps in OTHER layers (L4 has no `--demo doc_qa`; no live Tetragon container exists on this dev machine), not by anything in L8 itself | `pytest tests/test_receipt.py -v -m "not integration"` → 32/32 pass |
 | L7 UI | `docs/L7_UI.md` | | ⬜ not started | — |
 
 Update your row at session end. Statuses: ⬜ not started · 🟡 partial · 🟢 complete · 🔴 blocked
@@ -31,7 +31,7 @@ Update your row at session end. Statuses: ⬜ not started · 🟡 partial · �
 
 | R | Requirement | Layer | Demoable |
 |---|---|---|---|
-| R1 | Air-gapped | L0 + L8 | ⬜ |
+| R1 | Air-gapped | L0 + L8 | 🔴 **a real, live violation was found and confirmed this session** — running the test suite on this dev machine opens a genuine outbound HTTPS connection to an Amazon CloudFront IP (Docling's model-loading path checking HuggingFace Hub for updates), because `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` are not set anywhere in this project's dev/test environment. Confirmed reproducible, confirmed root-caused, confirmed fixed by setting those two env vars (tests still pass identically). Not patched by this session — it is not L8's file to fix — see Session 9 and Open Questions below. L8's own receipt/signing machinery is otherwise proven correct: it is exactly the kind of event a real Tetragon/pktap capture would have caught and flagged in a receipt. |
 | R2 | Multiple models at once | L1 | 🟡 registry loads all 4, all 4 individually healthy live (Ollama profile). Co-residency is *technically* achievable (observed once, real) but is memory-pressure-dependent and causes heavy swapping on this 8 GB machine — this profile deliberately runs **sequential-with-reload**, not co-resident. See PATCH 04: root cause found (`gemma4:e2b`'s true footprint is ~6.5 GB, not 1.7 GB), reload cost measured (~9.3 s median for gemma) |
 | R3 | Automatic model selection | L2 | ✅ proven live end-to-end on the local profile — all 3 non-trivial demo routes (coding / text-QA / image-QA) ran against real `gemma4-e2b` acting as router and chose correctly; see PATCH 02 |
 | R4 | Add models without redesign | L1 + L2 | ✅ proven by `test_registry_reload_picks_up_new_file` |
@@ -46,7 +46,7 @@ Update your row at session end. Statuses: ⬜ not started · 🟡 partial · �
 | R13 | DEMO scan → approval note | L3+L4+L6+L7b | ⬜ |
 | R14 | DEMO code run & verified | L5 + L4 | 🟡 L5's half proven live: `run_tests()` (the "run AND verified" function) genuinely executes `pytest -q test_code.py` inside a real gVisor container and reports pass/fail correctly — see Session 4. L4's `node_verify` for CODING now calls `run_tests()` directly (not `run_python()`), and the write-code/write-tests/execute-code steps were each verified live in isolation this session — the one missing piece is a recorded full `--demo coding` run showing the whole loop fire end to end (deferred, see Session 8). |
 | R15 | DEMO multimodal | L3 + L4 | 🟡 L3's half proven live (see R8 row) — a scanned document and a drawing image both went through real OCR extraction with correct tag recovery. L4 still needs to build the doc-QA flow that reasons over the resulting spans. |
-| R16 | DEMO zero external calls | L8 | ⬜ |
+| R16 | DEMO zero external calls | L8 | 🟡 the receipt machinery (`build_receipt`/`verify`/`verify_receipt.py`) is real and proven — a clean synthetic receipt verifies ✅ SOVEREIGN, a tampered one is caught, a receipt with an external event is caught. The live CLI-level demo (`--demo doc_qa` + `verify_receipt.py` + `negative_control.sh`) could not run on this dev machine: no `doc_qa` demo exists in L4 yet, and no Tetragon container exists here (same category of gap as every prior session's Tetragon-on-macOS note). See Session 9. |
 
 ---
 
@@ -100,6 +100,49 @@ They must be filled in for real the first time this repo runs on the actual venu
 Anything a session wanted to do but a Drift tripwire forbade. Resolve these **between**
 sessions, as a team — never inside a session.
 
+- **URGENT — a real live network call was found and reproduced in Session 9 (L8), and
+  needs a fix outside L8's file scope.** Running `pytest tests/test_ingest.py` (and, by
+  extension, any full-suite `pytest` run) on this dev machine opens a genuine outbound
+  HTTPS connection — confirmed via `lsof -p <pid>` showing an `ESTABLISHED` TCP socket to
+  a `2600:9000:...` IPv6 address, `whois`'d to **Amazon.com, Inc. (AMZ-CF — CloudFront)**,
+  the CDN HuggingFace Hub serves model files through. No `HF_HUB_OFFLINE` or
+  `TRANSFORMERS_OFFLINE` environment variable is set anywhere in this repo, any script,
+  or the shell environment — confirmed by grep and `env`. **Root cause confirmed, not
+  guessed:** setting `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` for the same `pytest`
+  invocation eliminates the connection entirely (verified via `lsof` polling across the
+  whole run) and all 9 `test_ingest.py` tests still pass identically, byte-for-byte the
+  same pass count as without the vars. This is almost certainly Docling's
+  `DocumentConverter`/layout-model construction doing a HuggingFace Hub "check for
+  updates" round-trip even though the underlying model files are already cached locally
+  — a well-known `huggingface_hub` behavior that only `HF_HUB_OFFLINE=1` disables. L0's
+  own `preflight.py` check #6 ("HF_HUB_OFFLINE=1 in every service env") only checks the
+  **vLLM service** environment, not the environment a developer's own shell (or CI) runs
+  `pytest` in — this gap is exactly why it was never caught before. **This is not L8's
+  file to fix** (the call happens inside L3's `core/ingest.py`, triggered by a
+  third-party library) — per CLAUDE.md's protocol, raising it here rather than patching
+  `core/ingest.py`, `pytest.ini`, or adding a `conftest.py` myself. **Recommended fix**
+  (for whoever picks this up, likely L3's or L0's owner): set `HF_HUB_OFFLINE=1` and
+  `TRANSFORMERS_OFFLINE=1` at the top of `core/ingest.py` (or in a repo-root
+  `conftest.py`/`.env` loaded before Docling ever imports) so this is impossible to
+  forget, not just documented. Until fixed, **anyone running this project's test suite
+  on a machine with real internet access is making a live external call every time** —
+  the exact claim R1 exists to make false.
+- **A second, smaller hygiene gap found while diagnosing the above:** `pytest.ini` has
+  no `norecursedirs`/`testpaths` restricting collection to `tests/`. A stray
+  `test_code.py` left under `data/workspaces/<task_id>/` by an earlier live L4 sandbox
+  run (Session 8) was picked up by pytest's default `test_*.py` discovery and broke
+  collection for the **entire** repo (`!!! Interrupted: 1 error during collection !!!`)
+  until manually cleaned out (`rm -rf data/workspaces/*` — safe, `data/` is gitignored
+  runtime state, not tracked). Whoever next touches `pytest.ini` (CONTRACTS-owned, out
+  of L8's scope) should consider `testpaths = tests` to make this class of bug
+  structurally impossible rather than a recurring manual cleanup.
+- **`docs/L8_AUDIT.md`'s negative_control.sh literally invokes `python -m core.graph
+  --demo doc_qa`, but `core/graph.py`'s CLI (built in Session 8, before this session
+  read L8's doc) only accepts `--demo coding` and `--demo approval`.** Not fixed this
+  session — `core/graph.py` is L4's file, out of L8's "Files You Own" scope. Whoever
+  next owns L4 should add a `doc_qa` demo path (the doc's DOC_QA plan shape already
+  exists in `core/prompts.py`'s `PLAN_PROMPT_BY_TASKTYPE`, so this is additive, not a
+  redesign) so `scripts/negative_control.sh` can actually run as literally specified.
 - **Decide before Session 8: replace `gemma4:e2b` as the general+vision model
   (`router_model_id` / general-vision-QA role) with `moondream`.** Measured on this same 8 GB
   M1 dev machine (PATCH 05, 2026-08-29): `moondream` has the smallest true footprint of every
@@ -2236,6 +2279,191 @@ Finish live verification of Session 8 (L4) before starting Session 9 — run
 `python -m core.graph --demo approval` for real, then update PROGRESS.md with observed iteration
 counts and wall-clock per task. Only after that: Session 9 — L8 Evidence & Audit Plane — start
 with `policies/egress_observe.yaml`.
+
+## Session 9 — L8 Evidence & Audit Plane — 2026-09-11
+
+**Status:** partial — `core/receipt.py`, both Tetragon policy files, `scripts/verify_receipt.py`,
+and `scripts/negative_control.sh` are all built exactly to the doc's required API/shape, and all
+32 non-integration tests pass for real (no mocks — real Ed25519 signing/verification, real
+canonical-JSON hashing, real synthetic log files). The two CLI-level DoD commands could not run
+on this dev machine, for reasons outside this layer's files (see below) — not because anything
+in L8 itself is broken. **A real, live R1 violation was also found and confirmed this session**
+while diagnosing why a full-repo test run behaved strangely — see the Open Questions entry above,
+this is the headline finding of the session, not a footnote.
+
+**Files created/changed:** `core/receipt.py`, `policies/egress_observe.yaml`,
+`policies/egress_enforce.yaml`, `scripts/verify_receipt.py`, `scripts/negative_control.sh`,
+`tests/test_receipt.py` (all new, per this layer's "Files You Own" list — no other layer's files
+touched). `data/workspaces/*` (stray leftover test artifacts from Session 8) deleted as pure
+runtime-state hygiene, not a source-file change.
+
+**Session start:** per the user's instruction, L4's still-pending live end-to-end verification
+(Session 8's own "Next action") was explicitly deferred rather than run first — the user said
+"let us save the test for last, go ahead with the next natural step," so this session proceeded
+directly to L8 without re-attempting the thermally-expensive L4 demos.
+
+**The dual egress-source design (this is the deviation to understand before reading anything
+else in this entry):** `docs/L8_AUDIT.md` assumes Tetragon unconditionally (`TETRAGON_LOG`,
+kprobe JSONL). This dev machine has no Tetragon (no eBPF on macOS) — the same category of gap
+Session 1 documented for `nft`. Rather than build strictly to the doc and leave the whole layer
+unverifiable here (the L0/L1 pattern for genuinely impossible platform gaps), this session
+noticed `core/config.py` already had `AuditCfg.egress_source: Literal["pktap", "tetragon"]`
+(added preemptively in PATCH_02, Session 2, with the comment "macOS dev; 'tetragon' on the Linux
+demo box") and built `read_egress()` to dispatch on it:
+- `"tetragon"` — parses Tetragon's real JSON export shape (`process_kprobe`/`tcp_connect`
+  events, `args[].sock_arg.daddr`/`dport`, `KPROBE_ACTION_SIGKILL` for blocked). This is the
+  doc's literal spec, for the real venue box.
+- `"pktap"` — this dev machine's substitute log shape, defined by this session (not previously
+  specified anywhere): one JSON object per line with EXACTLY `EgressEvent`'s own field names
+  (`timestamp`, `binary`, `pid`, `destination_ip`, `destination_port`, `action`). **No producer
+  for this log exists in the repo** — that is deliberately out of L8's file scope (a capture
+  process is an L0 concern, the thing that starts/owns background services, same as the
+  tetragon container itself). `read_egress()`/`build_receipt()`/`verify()` are written and
+  fully tested against this log shape via synthetic fixtures, so they need no further change
+  once a future L0 session adds a real pktap-tailing capture script. Recorded as an Open
+  Question above, not implemented — building it would mean either exceeding this layer's file
+  scope or improvising root-requiring `tcpdump` invocations without the user's explicit sign-off,
+  neither of which this session did.
+- Both paths converge on the same fail-closed rule (missing/empty log raises) and the same
+  `list[EgressEvent]` — `build_receipt()`/`verify()` have zero awareness of which source is active.
+
+**A real bug found and fixed before any test ran:** the first draft of `_canonical_payload()`
+serialized datetimes via a hand-written `default=lambda obj: obj.isoformat()` fallback in
+`json.dumps()`. `build_receipt()` passes raw Python `datetime` objects into this function, but
+`verify()` passes `receipt.model_dump(mode="json")` — a dict where datetimes are **already**
+strings, because pydantic serialized them first. Tested empirically:
+`datetime.now(timezone.utc).isoformat()` produces `"...013695+00:00"`, while pydantic's
+`model_dump(mode="json")` for the identical instant produces `"...013695Z"` — **different
+strings for the same instant.** Since `_canonical_payload()` is supposed to produce
+byte-identical output from both call sites (that is the entire point of a payload hash), this
+would have made **every single receipt fail its own signature verification**, always, silently,
+the first time anyone actually called `verify()` — caught before writing a single test, by
+reasoning through the two call sites' actual input shapes rather than assuming symmetry. **Fix:**
+introduced `_ReceiptPayload(BaseModel)`, a small pydantic model holding exactly the 9
+payload fields (everything in `TaskReceipt` except `payload_sha256`/`signature_ed25519`/
+`public_key_ed25519`, which are computed FROM this payload and would be circular to include).
+`_canonical_payload()` now ALWAYS constructs `_ReceiptPayload(**receipt_fields)` and dumps
+`.model_dump(mode="json")` of that — routing both call sites through the identical pydantic
+serializer every time, regardless of whether the caller handed it raw objects or already-JSON
+dicts (pydantic re-validates dicts into nested models transparently, e.g.
+`route_decisions: list[RouteDecision]` accepts a list of plain dicts fine). Verified via
+`test_sign_then_verify_roundtrip`, `test_receipt_json_is_stable_across_runs`, and by hand before
+writing those tests.
+
+**A second real (test) bug found while writing `test_tampered_artifact_hash_fails`:** the test
+originally placed its throwaway artifact file at an arbitrary `tmp_path`, wrote a tampered
+version, and asserted `verify()` would catch the mismatch — but it silently didn't
+(`assert True is False` — i.e. `ok2` came back `True`). Root cause: `verify()`'s artifact-hash
+check only looks at `SETTINGS.paths.outputs / receipt.task_id / filename` and
+`SETTINGS.paths.outputs / filename` (matching exactly where `core.render.render()` actually
+writes files, per Session 7 — `artifact_hashes` in the frozen `TaskReceipt` schema stores only a
+bare filename, no path, so SOME convention is unavoidable). The test's artifact wasn't at either
+location, so `verify()` correctly treated it as "not present on this machine" (not itself a
+failure — a receipt should still verify on a machine that doesn't have the original files) and
+skipped the check entirely — this is `verify()` behaving exactly as designed, and the test was
+unrealistic. Fixed by monkeypatching `SETTINGS.paths.outputs` to the test's own `tmp_path` and
+placing the artifact at the real convention's path before tampering it.
+
+**Definition of Done — what actually ran, and what could not:**
+
+`pytest tests/test_receipt.py -v -m "not integration"` → **PASS, for real**
+```
+collected 34 items / 2 deselected / 32 selected
+tests/test_receipt.py::test_is_external_table[...] PASSED  (22 parametrized cases)
+tests/test_receipt.py::test_canonical_payload_is_deterministic PASSED
+tests/test_receipt.py::test_missing_tetragon_log_raises PASSED
+tests/test_receipt.py::test_missing_tetragon_log_raises_even_when_empty PASSED
+tests/test_receipt.py::test_read_egress_filters_by_time_window PASSED
+tests/test_receipt.py::test_sign_then_verify_roundtrip PASSED
+tests/test_receipt.py::test_external_event_sets_count_and_fails_verify PASSED
+tests/test_receipt.py::test_tampered_field_fails_verification PASSED
+tests/test_receipt.py::test_tampered_artifact_hash_fails PASSED
+tests/test_receipt.py::test_receipt_json_is_stable_across_runs PASSED
+tests/test_receipt.py::test_write_receipt_roundtrips_through_json PASSED
+32 passed, 2 deselected in 0.65s
+```
+(2 more tests than the doc's 8 non-integration items — `test_missing_tetragon_log_raises_even_when_empty`
+and `test_read_egress_filters_by_time_window` — added because the doc's own text calls out both
+"missing" and "empty" as distinct failure cases, and time-window filtering is real logic in
+`read_egress()` that the doc's own test list didn't otherwise cover.)
+
+`python -m core.graph --demo doc_qa` → **could not run.** `core/graph.py`'s CLI (built Session 8)
+only accepts `--demo coding`/`--demo approval` — `doc_qa` is not a registered choice. This is an
+L4 gap, not an L8 one; recorded in Open Questions above rather than patched here.
+
+`python scripts/verify_receipt.py "$(ls -t data/receipts/*.json | head -1)"` → **PASS, for real**,
+using a synthetic clean receipt (real Ed25519 key generated at `data/signing_key.pem`, real
+sign+verify, real canonical-JSON hash match):
+```
+Receipt        t-test-clean
+Payload hash   MATCHES
+Signature      VALID (ed25519, key 7eb0b455…)
+Models used    gemma4-e2b (sha 614e2730…)
+Tool calls     1  (all recorded)
+Egress events  1 observed — 1 internal, 0 external
+Artifacts      (none)
+VERDICT        ✅ SOVEREIGN — no external connection during this task
+```
+Exit code 0, confirmed. Also confirmed the script's failure paths for real: a tampered
+`route_decisions[0].reason` produces `Payload hash MISMATCH` + `Signature INVALID` +
+`VERDICT ❌ NOT SOVEREIGN`, exit code 1; a missing file exits 2 with a usage-independent error;
+no arguments prints usage and exits 2.
+
+`bash scripts/negative_control.sh` → **could not run.** Needs a live `tetragon` Docker container
+(`docker cp policies/egress_enforce.yaml tetragon:/etc/tetragon/tetragon.tp.d/`) — no such
+container exists on this dev machine (colima/Docker were stopped per the user's request at the
+end of Session 8, and even running, `docker-compose.yml`'s tetragon service has never been
+started on macOS in this project — same category of gap as every prior session's Tetragon note,
+compounded here by `--demo doc_qa` not existing either). The script is written faithfully to the
+doc's literal steps (plus one added safety step — see Deviations below) for when a real Linux
+Tetragon setup is available.
+
+**Deviations from the doc (and why):**
+- The dual `"tetragon"`/`"pktap"` egress source (covered in full above) — the single largest
+  deviation, forced by this dev machine having no eBPF, using an escape hatch (`AuditCfg`)
+  Session 2 already anticipated for exactly this problem.
+- `scripts/negative_control.sh` has an added step 6, restoring `egress_observe.yaml` after the
+  demo — the doc's own literal script only has 5 steps and never restores observe-only mode.
+  Added because both this file's own header comment and `policies/egress_enforce.yaml`'s header
+  comment already state enforcement must never be left loaded outside the demo; leaving the
+  script itself unable to restore that state would contradict its own documented intent.
+- `_ReceiptPayload` (an internal pydantic model, not in the doc's required API list) exists
+  solely to fix the datetime-serialization bug above — an implementation detail behind
+  `_canonical_payload()`'s unchanged signature, not a new public surface.
+
+**Surprises a fresh session must know:**
+- **The R1 network-leak finding (see Open Questions) is the load-bearing discovery of this
+  session — read it before touching L3, L0, or `pytest.ini`.** It was found by accident (a
+  seemingly-hung `pytest -q` run with flat CPU usage turned out to have an `ESTABLISHED` HTTPS
+  socket via `lsof -p <pid>`), not by looking for it — worth remembering that "the test run is
+  just slow" is not always the right explanation for an unexplained stall in this project.
+- Cleaning `data/workspaces/*` before running the full suite is necessary on this machine right
+  now (stray `test_code.py` from Session 8's live sandbox runs breaks pytest collection
+  entirely) — this will recur after any future live CODING-task run until `pytest.ini` gets a
+  `testpaths`/`norecursedirs` restriction (see Open Questions).
+- `data/signing_key.pem` is generated on first `sign()` call, exactly per spec, mode 0600,
+  already covered by `.gitignore`'s `*.pem` rule (added in PATCH_01, verified still present).
+  Deleted the one generated during this session's manual testing before finishing, so the repo
+  carries no signing key — whoever runs this for real will get a fresh one generated
+  automatically on first use, as designed.
+- Whole-repo regression with `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` set (workaround for the
+  R1 finding, NOT committed anywhere): `106 passed, 9 failed, 19 deselected` — all 9 failures
+  are the pre-existing, already-documented `test_sandbox.py` Docker-daemon-unavailable gap
+  (colima stopped, per the user's end-of-Session-8 cleanup request), unrelated to L8.
+
+### Open questions
+- See the two new entries added above this session's line (network-leak finding, `pytest.ini`
+  collection hygiene, and the `--demo doc_qa` gap) — all three need action from a session other
+  than L8's before this layer's remaining DoD commands can run for real.
+
+### Next action
+Whoever picks this up next should, in order: (1) fix the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`
+gap (L3/L0 territory) since it is a live, currently-reproducible air-gap violation, not a
+documentation nit; (2) add a `doc_qa` demo path to `core/graph.py`'s CLI (L4) so
+`scripts/negative_control.sh` can run as written; (3) then, on a machine with real Docker +
+Tetragon (or the venue Linux box), run `bash scripts/negative_control.sh` for real and paste its
+output here. Only after L8's own CLI-level DoD is genuinely green: Session 10 — L7 UI —
+start with `api.py` (FastAPI, thin) per `docs/L7_UI.md`.
 
 <!-- Append below. Template:
 

@@ -1,0 +1,31 @@
+# L8 — always-loaded Tetragon policy. Observes every outbound TCP connect attempt on
+# the host at the kernel level (a kprobe on tcp_connect sees the real destination
+# regardless of proxy settings, /etc/hosts, or application-level lying) and logs it —
+# it never blocks anything. This is the policy that runs during every real task, so a
+# TaskReceipt's egress_events always reflects what the kernel actually saw.
+#
+# Loaded by the tetragon container's tetragon.tp.d mount (see docker-compose.yml, L0).
+# Events land in data/tetragon/events.json (JSONL) — see core/receipt.py's
+# read_egress(). Do not merge this with egress_enforce.yaml: this file must always be
+# the one loaded for a real task's receipt to be trustworthy; the enforcing variant is
+# swapped in only for the negative-control demo (see scripts/negative_control.sh).
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: "egress-observe"
+spec:
+  kprobes:
+    - call: "tcp_connect"
+      syscall: false
+      args:
+        - index: 0
+          type: "sock"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "NotDAddr"
+              values:
+                - 127.0.0.1
+                - 172.16.0.0/12
+                - 10.0.0.0/8
+                - 192.168.0.0/16

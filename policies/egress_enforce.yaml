@@ -1,0 +1,33 @@
+# L8 — the ENFORCEMENT variant of egress_observe.yaml. Same NotDAddr matcher (any
+# destination that is not loopback/RFC1918), plus a Sigkill action, so a genuine
+# outbound attempt is not just logged but visibly killed.
+#
+# Load this ONLY for the negative-control demo (scripts/negative_control.sh) — never
+# during a real task. A killed connection during a real task would corrupt whatever
+# that task was doing; the point of this file is purely to prove, live, in front of an
+# audience, that the observation pipeline is connected to something real and not just a
+# monitor showing zero events because it is unplugged. Swap it back to
+# egress_observe.yaml immediately after the demo. Deliberately kept as a SEPARATE file
+# from egress_observe.yaml, not a flag on it — do not merge them.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: "egress-enforce"
+spec:
+  kprobes:
+    - call: "tcp_connect"
+      syscall: false
+      args:
+        - index: 0
+          type: "sock"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "NotDAddr"
+              values:
+                - 127.0.0.1
+                - 172.16.0.0/12
+                - 10.0.0.0/8
+                - 192.168.0.0/16
+          matchActions:
+            - action: Sigkill
