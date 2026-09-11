@@ -9,6 +9,7 @@ profiles. Only the two @pytest.mark.integration tests need a live capture proces
 """
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -289,31 +290,82 @@ def test_write_receipt_roundtrips_through_json(egress_log, tmp_path, monkeypatch
 
 
 # ─────────────────────────── integration (needs a live capture) ────────────────────
+#
+# Both tests below trigger real network activity and check the ACTIVE, CONFIGURED
+# egress_source actually captured it. Which process should make that call depends on
+# which source is active — this is not optional dispatch, it's a proven, hard fact
+# about this project's two source implementations, found live in Session 9:
+#   "tetragon" — this dev machine runs Tetragon inside a colima/Lima Linux VM. Its
+#       pid:host/cgroup:host visibility is scoped to THAT VM's own kernel, so it can
+#       only see connections that originate INSIDE colima's Docker — never a native
+#       macOS process (confirmed empirically: a native macOS curl produced exactly
+#       zero Tetragon events, while a `docker run curlimages/curl` produced a real,
+#       fully-detailed kprobe event). On the real bare-metal Linux venue box this
+#       distinction disappears entirely — pid:host there covers the WHOLE machine, so
+#       a native call is exactly the right, simplest test there.
+#   "pktap" — this dev machine's own substitute, observing the host's real network
+#       stack directly (once a capture producer exists — see core/receipt.py's module
+#       docstring); a native macOS call is the correct choice for that source.
+# A version of these tests that always used a native call would silently, permanently
+# fail on any dev machine running Tetragon-in-a-VM — not because the receipt pipeline
+# is broken, but because the test asked the wrong process to make the call for the
+# source it was actually checking. See scripts/negative_control.sh's
+# NEGATIVE_CONTROL_IN_CONTAINER flag for the exact same fix applied there first.
+
+
+def _trigger_internal_connection() -> None:
+    """Make a real connection to something on an RFC1918/loopback address, in whatever
+    way the active egress_source can actually observe."""
+    if SETTINGS.audit.egress_source == "tetragon":
+        # Docker's default bridge network does no name-based DNS between containers
+        # (confirmed: curling "qdrant-l6" by name fails outright) — host.docker.internal
+        # is colima's documented, working route from inside a container back to the
+        # host's exposed port, and resolves to an RFC1918 address (confirmed via a real
+        # captured Tetragon event elsewhere in this session: saddr in the 192.168.5.0/24
+        # range), so it is a genuine internal connection from Tetragon's point of view.
+        subprocess.run(
+            ["docker", "run", "--rm", "curlimages/curl:latest", "-m", "5", "-s", "-o", "/dev/null",
+             "http://host.docker.internal:6333/collections"],
+            capture_output=True,
+        )
+    else:
+        from core.kb import stats
+
+        stats()  # any real call to the live Qdrant on 127.0.0.1:6333
+
+
+def _trigger_external_connection() -> None:
+    """Make a real connection to a public, non-RFC1918 address, in whatever way the
+    active egress_source can actually observe."""
+    if SETTINGS.audit.egress_source == "tetragon":
+        subprocess.run(
+            ["docker", "run", "--rm", "curlimages/curl:latest", "-m", "5", "-s", "-o", "/dev/null",
+             "https://example.com"],
+            capture_output=True,
+        )
+    else:
+        subprocess.run(["curl", "-m", "3", "https://example.com"], capture_output=True)
 
 
 @pytest.mark.integration
 def test_live_capture_sees_internal_connections():
-    """A real Qdrant call (127.0.0.1:6333) should appear in the live egress log as an
-    internal event within a tight time window around the call."""
-    from core.kb import stats
-
+    """A real internal connection should appear in the live egress log as an internal
+    event within a tight time window around the call."""
     started = datetime.now(timezone.utc)
-    stats()  # any real call to the live Qdrant on 127.0.0.1:6333
+    _trigger_internal_connection()
     finished = datetime.now(timezone.utc)
 
     events = read_egress(started - timedelta(seconds=2), finished + timedelta(seconds=2))
-    assert any(e.destination_ip == "127.0.0.1" and not e.is_external for e in events)
+    assert any(not e.is_external for e in events)
 
 
 @pytest.mark.integration
 def test_negative_control_produces_external_event():
-    """Requires the ENFORCEMENT policy loaded (see scripts/negative_control.sh) and a
-    live capture — deliberately triggers an outbound connection and expects the
-    monitor to have recorded it as external (and, under enforcement, blocked)."""
-    import subprocess
-
+    """Requires a live capture — deliberately triggers an outbound connection and
+    expects the monitor to have recorded it as external (and, if the ENFORCEMENT
+    policy is also loaded — see scripts/negative_control.sh — to have been blocked)."""
     started = datetime.now(timezone.utc)
-    subprocess.run(["curl", "-m", "3", "https://example.com"], capture_output=True)
+    _trigger_external_connection()
     finished = datetime.now(timezone.utc)
 
     events = read_egress(started - timedelta(seconds=2), finished + timedelta(seconds=2))

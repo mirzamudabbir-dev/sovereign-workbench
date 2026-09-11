@@ -1,14 +1,28 @@
-# L8 — always-loaded Tetragon policy. Observes every outbound TCP connect attempt on
+# L8 — always-loaded Tetragon policy. Observes EVERY outbound TCP connect attempt on
 # the host at the kernel level (a kprobe on tcp_connect sees the real destination
 # regardless of proxy settings, /etc/hosts, or application-level lying) and logs it —
 # it never blocks anything. This is the policy that runs during every real task, so a
 # TaskReceipt's egress_events always reflects what the kernel actually saw.
 #
+# Deliberately NO destination filter here (no NotDAddr/matchArgs selector) — this
+# policy captures internal (RFC1918/loopback) connections too, not just external ones.
+# core/receipt.py's is_external() does the internal/external classification entirely
+# in application code afterward; filtering at the eBPF level would make it structurally
+# impossible for the very events is_external() and EgressEvent.is_external exist to
+# classify to ever reach the log in the first place. Confirmed live in Session 9's
+# follow-up: a version of this file WITH a NotDAddr filter (matching an earlier draft)
+# produced zero kprobe events at all for a real, verified container-to-container
+# connection — the filter doesn't just deprioritize internal traffic, it makes it
+# invisible outright, which is what tests/test_receipt.py's
+# test_live_capture_sees_internal_connections exists to catch.
+#
 # Loaded by the tetragon container's tetragon.tp.d mount (see docker-compose.yml, L0).
 # Events land in data/tetragon/events.json (JSONL) — see core/receipt.py's
 # read_egress(). Do not merge this with egress_enforce.yaml: this file must always be
 # the one loaded for a real task's receipt to be trustworthy; the enforcing variant is
-# swapped in only for the negative-control demo (see scripts/negative_control.sh).
+# swapped in only for the negative-control demo (see scripts/negative_control.sh) and
+# DOES keep a NotDAddr filter — enforcement should only ever kill genuinely external
+# connections, never internal Qdrant/sandbox traffic.
 apiVersion: cilium.io/v1alpha1
 kind: TracingPolicy
 metadata:
@@ -20,12 +34,3 @@ spec:
       args:
         - index: 0
           type: "sock"
-      selectors:
-        - matchArgs:
-            - index: 0
-              operator: "NotDAddr"
-              values:
-                - 127.0.0.1
-                - 172.16.0.0/12
-                - 10.0.0.0/8
-                - 192.168.0.0/16

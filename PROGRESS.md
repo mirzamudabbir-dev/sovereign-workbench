@@ -20,7 +20,7 @@ A session that ends without an entry here has failed, regardless of how much cod
 | L6 KB | `docs/L6_KB.md` | | 🟢 complete — real Qdrant (Docker/colima), real embedding calls, all live on this machine (see Session 6) | `pytest tests/test_kb.py -v -m integration` → 10/10 pass, real services, no mocks |
 | L7b Renderer | `docs/L7B_RENDERER.md` | | 🟢 complete — all 14 tests real, no live services needed (see Session 7) | `pytest tests/test_render.py -v` → 14/14 pass |
 | L4 Orchestrator | `docs/L4_ORCHESTRATOR.md` | | 🟡 partial — code complete, 7/7 non-integration tests pass for real; live end-to-end demos NOT completed this session (thermal/time constraints on this dev machine, see Session 8) | `pytest tests/test_graph.py -v -m "not integration"` → 7/7 pass. `--demo coding`/`--demo approval` not yet run to completion. |
-| L8 Audit | `docs/L8_AUDIT.md` | | 🟢 complete — core/receipt.py + policies/ + scripts complete, 32/32 non-integration tests pass; `--demo doc_qa` (added to L4 with user sign-off) runs end-to-end producing a real receipt that verifies ✅ SOVEREIGN; a real Tetragon container (via colima) proved live kernel-level observation AND enforcement (a genuine SIGKILL) — see Session 9 (continued). Only one continuous unbroken `negative_control.sh` run is outstanding, blocked by this 8 GB dev machine's resource limits under colima+Tetragon+Qdrant+Ollama simultaneously, not a code defect. | `pytest tests/test_receipt.py -v -m "not integration"` → 32/32 pass; `verify_receipt.py` on a real receipt → exit 0 ✅ SOVEREIGN |
+| L8 Audit | `docs/L8_AUDIT.md` | | 🟢 complete — **all 34 tests pass (32 non-integration + 2 integration), the full test suite finished**; `--demo doc_qa` (added to L4 with user sign-off) runs end-to-end producing a real receipt that verifies ✅ SOVEREIGN; a real Tetragon container (via colima) proved live kernel-level observation AND enforcement (a genuine SIGKILL); a real bug in the doc's own `egress_observe.yaml` (a NotDAddr filter that made internal-connection capture structurally impossible) found and fixed — see Session 9 (continued x2). Only one continuous unbroken `negative_control.sh` run is outstanding, blocked by this 8 GB dev machine's resource limits under colima+Tetragon+Qdrant+Ollama simultaneously, not a code defect. | `pytest tests/test_receipt.py -v` (both marks) → 34/34 pass; `verify_receipt.py` on a real receipt → exit 0 ✅ SOVEREIGN |
 | L7 UI | `docs/L7_UI.md` | | ⬜ not started | — |
 
 Update your row at session end. Statuses: ⬜ not started · 🟡 partial · 🟢 complete · 🔴 blocked
@@ -2669,6 +2669,99 @@ Session 10 — L7 Workbench UI + API — start with `api.py` endpoints, per `doc
 own Definition of Done is now green for everything achievable on this dev machine; the one
 remaining continuous negative-control run is an infra/resource-limit gap, not a code blocker,
 and does not need to hold up starting L7.)
+
+## Session 9 (continued again) — finishing the last two integration tests, a real policy bug fixed — 2026-09-11
+
+**Status:** complete. `tests/test_receipt.py`'s two `@pytest.mark.integration` tests
+(`test_live_capture_sees_internal_connections`, `test_negative_control_produces_external_event`)
+had been written earlier this session but never actually executed. Ran them for real this
+continuation — both failed on the first attempt, for a genuine reason, not a test-environment
+fluke — diagnosed and fixed properly. **All 34 tests in `tests/test_receipt.py` now pass for
+real** (32 non-integration + 2 integration), completing this layer's test suite in full.
+
+**A real, previously-unnoticed bug found in `docs/L8_AUDIT.md`'s own literal policy YAML,
+found and fixed:** `policies/egress_observe.yaml`'s kprobe selector used
+`operator: "NotDAddr"` against the RFC1918/loopback ranges — meaning, read correctly, "only
+report this kprobe hit when the destination is **NOT** one of these internal ranges." This
+policy, copied verbatim from the doc, **structurally cannot ever capture an internal
+connection** — not "deprioritizes" it, excludes it at the eBPF level before Tetragon even
+considers reporting it. Confirmed by direct experiment: a real, verified container-to-Qdrant
+connection (via `host.docker.internal`, later confirmed to resolve through
+`192.168.5.2 → sshd relay → docker-proxy → 172.17.0.2`, all genuinely RFC1918) produced **zero**
+`process_kprobe` events under the original policy, and started appearing correctly the moment
+the filter was removed. This directly contradicts `core/receipt.py`'s own design — the
+`EgressEvent.is_external` field and the `is_external()` function exist specifically to classify
+BOTH internal and external captured connections; a capture policy that only ever reports
+external ones makes that classification function partially pointless and makes
+`test_live_capture_sees_internal_connections` (also specified in the same doc) impossible to
+ever pass, on any machine, including the real venue box — this is not a dev-machine artifact.
+**Fix:** removed the `NotDAddr` selector from `policies/egress_observe.yaml` entirely — it now
+captures every `tcp_connect`, internal and external alike, exactly as its own header comment
+already claimed ("Observes every outbound TCP connect attempt") before this fix made it true.
+`policies/egress_enforce.yaml` is **unchanged** — its `NotDAddr` filter is correct and
+load-bearing there: enforcement must only ever kill genuinely external connections, never
+internal Qdrant/sandbox traffic, or it would break the system it's supposed to protect.
+
+**A second, smaller real bug found while building the fix for the tests themselves:** the
+initial container-based "internal connection" substitute used `qdrant-l6` as a hostname
+(`docker run curlimages/curl http://qdrant-l6:6333/...`) — this fails outright
+(`http_code=000`) because Docker's default `bridge` network (which `qdrant-l6` runs on, having
+been started with a plain `docker run` and no custom network) does **not** do name-based DNS
+resolution between containers — only user-defined networks do. Fixed by using
+`host.docker.internal` instead (colima's documented, working route from inside a container back
+to the host's exposed port), confirmed working via a direct `curl` before relying on it in a test.
+
+**Test design fix, entirely within L8's own file scope:** both integration tests now dispatch on
+`SETTINGS.audit.egress_source` via two small helpers (`_trigger_internal_connection()`,
+`_trigger_external_connection()`) — a native call for `"pktap"`, a container-based call for
+`"tetragon"` — exactly the same fix already applied to `scripts/negative_control.sh`'s
+`NEGATIVE_CONTROL_IN_CONTAINER` flag earlier this session, for the identical underlying reason
+(a Tetragon-in-a-colima-VM setup cannot see native macOS process traffic at all).
+
+**Definition of Done — final, complete state:**
+```
+pytest tests/test_receipt.py -v -m "not integration"  → 32 passed
+pytest tests/test_receipt.py -v -m integration         → 2 passed
+                                                          (test_live_capture_sees_internal_connections,
+                                                           test_negative_control_produces_external_event)
+pytest tests/test_receipt.py tests/test_graph.py -v -m "not integration" → 39 passed, 5 deselected
+```
+All real, no mocks, against a genuinely running colima + Tetragon (v1.1.2, real eBPF kprobes) +
+Qdrant stack. `config.yaml`'s `audit.egress_source` reverted to `pktap` afterward (same reasoning
+as the prior continuation entry — this Tetragon setup still only sees container-originated
+traffic, `pktap` is the honest default until a real capture producer exists for native traffic).
+
+**Surprises a fresh session must know:**
+- **`policies/egress_observe.yaml` no longer has a destination filter at all — it will be
+  noisier than before** (every internal chatter connection is now a logged event, not just
+  external attempts). This is the correct, intended tradeoff per the design reasoning above; do
+  not "fix" this back to a NotDAddr filter without re-reading this entry first — that exact
+  change is what silently broke internal-connection observability in the first place.
+- Two more stray, slow-to-exit `core.graph`/pytest processes were found and killed this
+  continuation (one from over 40 minutes earlier in the session, per its start timestamp) — this
+  reinforces the Session 9 (continued) finding that these can linger far longer than expected;
+  always `ps aux | grep -E "core.graph|pytest.*test_graph"` and kill anything stale before
+  starting a new run against `data/checkpoints.sqlite`.
+- `docker run --rm curlimages/curl:latest` connecting to `host.docker.internal` resolves through
+  a real multi-hop chain on this colima setup (`192.168.5.2` gateway → `sshd` port-forward relay
+  → `docker-proxy` → the target container's actual bridge IP) — all of it real, all of it now
+  correctly captured as separate internal `tcp_connect` events per hop. Useful to know if a
+  future receipt's egress_events list looks surprisingly long for a single logical connection —
+  that's multiple real relay hops, not duplicate/buggy logging.
+
+**Deviations from the doc (and why):** the `egress_observe.yaml` fix is a deviation from the
+doc's literal YAML — justified in full above; it makes the policy's own header comment and
+`core/receipt.py`'s design intent actually true, where the literal original text was not just an
+interpretation gap but a directly disprovable claim ("observes every outbound TCP connect
+attempt") given what the NotDAddr selector actually did.
+
+### Open questions
+- _(none new this continuation)_
+
+### Next action
+Unchanged: Session 10 — L7 Workbench UI + API — start with `api.py` endpoints, per
+`docs/L7_UI.md`. L8's test suite is now completely finished (34/34 across both marks); the one
+remaining continuous `negative_control.sh` run stays a resource-limit gap, not a code blocker.
 
 <!-- Append below. Template:
 
